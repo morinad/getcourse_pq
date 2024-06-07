@@ -1,0 +1,80 @@
+let 
+main_url = "https://directprorf.getcourse.ru",
+
+
+function = (token as text, report as text, start as text, delay as nullable text)=>
+let
+dateFunc = (dat)=>
+        if dat = "yesterday" then Date.ToText(Date.AddDays(Date.From(DateTime.LocalNow()) , -1),"yyyy-MM-dd") 
+        else if dat = "today" then Date.ToText(Date.From(DateTime.LocalNow()),"yyyy-MM-dd")
+        else if (try Number.From(Text.BeforeDelimiter(dat,"daysAgo")) otherwise 0) >0 then Date.ToText(Date.AddDays(Date.From(DateTime.LocalNow()),-1*Number.From(Text.BeforeDelimiter(dat,"daysAgo"))),"yyyy-MM-dd") 
+        else dat,
+nulldelay = if delay=null then 0 else delay,
+status = (web)=> try if Value.Metadata(web)[Response.Status]=200  then true else false otherwise false,
+querydata = [#"key" = token ],
+web =  Function.InvokeAfter(()=>  Web.Contents(main_url, [RelativePath = "pl/api/account/"& report &"?created_at[from]=" & dateFunc(start), 
+        ManualStatusHandling = {404, 400}, Query =querydata]), #duration(0,0,0, Number.From(nulldelay)))  ,
+result = Json.Document(web),
+export = if result[success]= true then Text.From(result[info][export_id]) else result[error_message],
+web2 = List.Generate(()=> 
+   [num = 0,  webq = Function.InvokeAfter(()=> Web.Contents(main_url, [RelativePath = "pl/api/account/exports/" & export, ManualStatusHandling = {404, 400}, 
+   IsRetry =true, Query = querydata]), #duration(0,0,0,10))] , 
+   each [num]<10,
+   each if status([webq]) then [num = [num]+1, webq = [webq]] else [num = [num]+1,  webq = Function.InvokeAfter(()=> Web.Contents(main_url, [RelativePath = "pl/api/account/exports/" & export, ManualStatusHandling = {404, 400},   IsRetry =true, Query = querydata]), #duration(0,0,0,10))]),
+last = List.Last(web2),
+json = Json.Document(last[webq]),
+info =  json[info],
+items = info[items],
+fields = List.Buffer(info[fields]),
+transform = List.Transform(items, each Record.FromList(_, fields)),
+totable= Table.FromList(transform, Splitter.SplitByNothing(), null, null, ExtraValues.Error),
+exp = Table.ExpandRecordColumn(totable, "Column1", fields, fields),
+final = if Value.Is((try Number.From(export) otherwise export), type number) then exp else export
+in final,
+
+
+
+FuncType = type function (
+
+   token as (type text meta [
+        Documentation.FieldCaption = "Ваш токен Getcourse:",
+        Documentation.SampleValues = {"as157GFhrH12eHg1nKaLq"}
+    ]),
+
+    report as (type text meta [
+        Documentation.FieldCaption = "Тип: users, deals, payments, groups/{ID}/users",
+        Documentation.SampleValues = {"groups/123456/users"}
+    ]),
+
+     start as (type text meta [
+        Documentation.FieldCaption = "Дата начала выгрузки:",
+        Documentation.SampleValues = {"2024-01-01"}
+    ]),
+
+     delay  as (type nullable text meta [
+        Documentation.FieldCaption = "Задержка при выполнении, сек:",
+        Documentation.SampleValues = {"90"}
+    ])
+    )
+    as table meta [
+        Documentation.Name = "Получаем данные из системы Getcourse.",
+       Documentation.LongDescription = "",
+        Documentation.Examples = {
+        [
+            Description = "Получаем табличку с данными по платежам",
+            Code = "getcourse(""1hnjGH86gH-37BFL"",""payments"",""2023-01-20"",null)",
+            Result = "Данные по платежам"
+        ],
+        [
+            Description = "Получаем табличку с пользователями группы",
+           Code = "getcourse(""1hnjGH86gH-37BFL"",""groups/123456/users"",""1000daysAgo"",""90"")",
+            Result = "Пользователи группы"
+        ]
+        }
+    ],
+
+
+result = Value.ReplaceType(function, FuncType)
+
+
+in result
